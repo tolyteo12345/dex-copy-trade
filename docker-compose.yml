@@ -1,0 +1,20 @@
+services:
+  copy-bot:
+    build: .
+    image: dex-copy-trade:latest
+    # Configuration (incl. PRIVATE_KEY) comes from .env — never commit it. DRY_RUN defaults
+    # to true; DRY_RUN=false trades REAL funds.
+    env_file: .env
+    restart: unless-stopped
+    # The bot drains in-flight trades for up to 15s on SIGTERM; give it margin.
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
