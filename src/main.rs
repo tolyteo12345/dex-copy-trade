@@ -21,6 +21,7 @@ use dex_copy_trade::execution::executor::{self, ExecutionStage, Executor, Execut
 use dex_copy_trade::execution::gas::{CappedEip1559, RpcFeeSource};
 use dex_copy_trade::execution::simulator::{RpcSimulator, Simulator};
 use dex_copy_trade::models::{CopyTrade, TradeIntent};
+use dex_copy_trade::notify::{self, Notifier, TelegramSink};
 use dex_copy_trade::risk::{RiskConfig, RiskEngine};
 use dex_copy_trade::storage::{DEDUP_TTL, InMemoryDedup};
 use dex_copy_trade::strategy::Sizer;
@@ -119,6 +120,14 @@ async fn main() -> anyhow::Result<()> {
     let (intent_out, intent_in) = mpsc::channel::<TradeIntent>(config.channel_capacity);
     let (trade_out, trade_in) = mpsc::channel::<CopyTrade>(config.channel_capacity);
     let registry = DecoderRegistry::new(&addrs, &config.supported_dexes);
+    let (notifier, notify_task) = match &config.telegram {
+        Some(tg) => {
+            let sink = TelegramSink::new(tg).context("building Telegram client")?;
+            let (notifier, task) = notify::spawn(sink, config.dry_run);
+            (notifier, Some(task))
+        }
+        None => (Notifier::disabled(), None),
+    };
 
     let watcher = Watcher::new(
         config.copy_mode,
@@ -129,11 +138,19 @@ async fn main() -> anyhow::Result<()> {
     );
     let mut watcher_task = tokio::spawn(watcher.run());
     let decoder_task = tokio::spawn(decoder::run_stage(registry, tx_in, intent_out));
-    let decision_task = tokio::spawn(decision::run_stage(decision, intent_in, trade_out));
+    let decision_task = tokio::spawn(decision::run_stage(
+        decision,
+        intent_in,
+        trade_out,
+        notifier.clone(),
+    ));
+    // The stages own the only `Notifier` clones, so the notify task drains and exits
+    // once they finish.
     let executor_task = tokio::spawn(executor::run_stage(
         execution,
         trade_in,
         config.executor_workers,
+        notifier,
     ));
 
     tokio::select! {
@@ -155,6 +172,9 @@ async fn main() -> anyhow::Result<()> {
         let _ = decoder_task.await;
         let _ = decision_task.await;
         let _ = executor_task.await;
+        if let Some(task) = notify_task {
+            let _ = task.await;
+        }
         watcher_res
     })
     .await
@@ -204,6 +224,7 @@ fn log_startup(cfg: &Config) {
         trade_cooldown_s = cfg.trade_cooldown.as_secs(),
         channel_capacity = cfg.channel_capacity,
         executor_workers = cfg.executor_workers,
+        telegram = cfg.telegram.is_some(),
         ws = %provider::redact_url(&cfg.ws_url),
         http = %provider::redact_url(&cfg.http_url),
         dry_run = cfg.dry_run,

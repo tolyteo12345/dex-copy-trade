@@ -43,6 +43,7 @@ execution/      gas policy → Executor::plan (2 bundle eth_simulateV1) → [liv
 | `execution/` | `executor.rs` (route → quote → impact → approvals → đo lượng thực nhận → plan), `simulator.rs`, `allowance.rs` (ERC20 + Permit2), `gas.rs`, `broadcast.rs` |
 | `ethereum/` | `provider.rs` (redact URL), `signer.rs` (`BotSigner`), `nonce.rs` (lease), `chain_state.rs` (`ChainReader`) |
 | `risk/`, `strategy/`, `storage/` | Rule risk, 4 strategy, `DedupStore` (in-memory, TTL 24h) |
+| `notify/` | Telegram: `Notifier::notify` chỉ `try_send` (không await, đầy thì bỏ); task nền gửi tuần tự, retry 429. URL chứa token: lỗi reqwest phải `without_url()` |
 | `utils/` | `chain_addresses(1)`: mọi địa chỉ contract (router, quoter, Permit2, WETH, Chainlink, Multicall3), `Backoff` |
 
 Thêm DEX: implement `DexDecoder` (đăng ký trong `DecoderRegistry::new`) và `DexAdapter`

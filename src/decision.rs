@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use crate::ethereum::chain_state::ChainReader;
 use crate::ethereum::provider::ProviderError;
 use crate::models::{ChainSnapshot, CopyTrade, TradeIntent, TradeSide};
+use crate::notify::{Notification, Notifier};
 use crate::risk::{RiskEngine, RiskError};
 use crate::storage::DedupStore;
 use crate::strategy::{Sizer, StrategyError};
@@ -126,6 +127,7 @@ pub async fn run_stage<R: ChainReader, D: DedupStore>(
     mut stage: DecisionStage<R, D>,
     mut rx: mpsc::Receiver<TradeIntent>,
     out: mpsc::Sender<CopyTrade>,
+    notifier: Notifier,
 ) {
     while let Some(intent) = rx.recv().await {
         let source_tx = intent.source_tx_hash;
@@ -149,6 +151,15 @@ pub async fn run_stage<R: ChainReader, D: DedupStore>(
                     strategy = stage.sizer.strategy_name(),
                     decode_to_decision_ms = (trade.decision_at - decoded_at).as_secs_f64() * 1000.0,
                 );
+                notifier.notify(Notification::Signal {
+                    source_wallet,
+                    source_tx,
+                    dex,
+                    side,
+                    token,
+                    amount_in: trade.amount_in,
+                    capped: trade.capped,
+                });
                 if out.send(trade).await.is_err() {
                     break;
                 }
