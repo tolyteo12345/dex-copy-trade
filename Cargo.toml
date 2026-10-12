@@ -19,6 +19,51 @@ tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "signal",
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
+# --- Solana (feature `sol`). The ETH binary never links these; ETH-only builds skip them
+# entirely with `--no-default-features`. Modular crates instead of `solana-sdk` keep the
+# build small; versions are aligned with what yellowstone-grpc-proto uses (solana-pubkey 4).
+base64 = { version = "0.22", optional = true }
+bs58 = { version = "0.5", optional = true }
+solana-hash = { version = "4", optional = true }
+solana-instruction = { version = "4", optional = true }
+solana-keypair = { version = "4", optional = true }
+solana-message = { version = "5", optional = true }
+solana-pubkey = { version = "4", features = ["curve25519"], optional = true }
+solana-signature = { version = "3", optional = true }
+solana-signer = { version = "4", optional = true }
+solana-transaction = { version = "5", features = ["wincode"], optional = true }
+wincode = { version = "0.6", optional = true }
+yellowstone-grpc-client = { version = "15", optional = true }
+yellowstone-grpc-proto = { version = "14", optional = true }
+
+[features]
+default = ["sol"]
+sol = [
+    "dep:base64",
+    "dep:bs58",
+    "dep:solana-hash",
+    "dep:solana-instruction",
+    "dep:solana-keypair",
+    "dep:solana-message",
+    "dep:solana-pubkey",
+    "dep:solana-signature",
+    "dep:solana-signer",
+    "dep:solana-transaction",
+    "dep:wincode",
+    "dep:yellowstone-grpc-client",
+    "dep:yellowstone-grpc-proto",
+]
+
+# One process per chain: `eth-copy-trade` and `sol-copy-trade` share only `src/common`.
+[[bin]]
+name = "eth-copy-trade"
+path = "src/bin/eth-copy-trade.rs"
+
+[[bin]]
+name = "sol-copy-trade"
+path = "src/bin/sol-copy-trade.rs"
+required-features = ["sol"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "macros", "rt-multi-thread"] }
 
