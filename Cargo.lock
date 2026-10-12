@@ -1677,6 +1677,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "parking_lot",
+ "reqwest",
  "serde_json",
  "thiserror",
  "tokio",

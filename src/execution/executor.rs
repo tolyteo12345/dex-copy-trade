@@ -24,6 +24,7 @@ use crate::dex::uniswap_v4::UniswapV4Adapter;
 use crate::dex::{DexAdapter, DexError, SwapParams};
 use crate::ethereum::chain_state::{ChainReader, IERC20};
 use crate::models::{CopyTrade, PoolKind, RouteLeg, TradeIntent, TradeSide};
+use crate::notify::{Notification, Notifier};
 use crate::strategy::mul_bps;
 use crate::utils::ChainAddresses;
 
@@ -487,6 +488,7 @@ pub async fn run_stage<R, S, G, T>(
     stage: Arc<ExecutionStage<R, S, G, T>>,
     mut rx: mpsc::Receiver<CopyTrade>,
     workers: usize,
+    notifier: Notifier,
 ) where
     R: ChainReader + 'static,
     S: Simulator + 'static,
@@ -500,13 +502,14 @@ pub async fn run_stage<R, S, G, T>(
             break;
         };
         let stage = Arc::clone(&stage);
+        let notifier = notifier.clone();
         tasks.spawn(async move {
             let sent = {
                 let _permit = permit;
-                execute_one(&stage, trade).await
+                execute_one(&stage, trade, &notifier).await
             };
             if let (Some((plan, sent)), Some(b)) = (sent, &stage.broadcaster) {
-                track_one(b, &plan, &sent).await;
+                track_one(b, &plan, &sent, &notifier).await;
             }
         });
         while let Some(done) = tasks.try_join_next() {
@@ -528,6 +531,7 @@ fn log_join(res: Result<(), tokio::task::JoinError>) {
 async fn execute_one<R, S, G, T>(
     stage: &ExecutionStage<R, S, G, T>,
     trade: CopyTrade,
+    notifier: &Notifier,
 ) -> Option<(ExecutionPlan, SentTrade)>
 where
     R: ChainReader,
@@ -549,6 +553,14 @@ where
             reason = %reason,
             decision_to_fail_ms = ms(decision_at.elapsed()),
         );
+        notifier.notify(Notification::Failed {
+            source_tx,
+            side,
+            token,
+            stage,
+            reason: reason.to_string(),
+            tx: None,
+        });
     };
 
     // Gas first: in wait mode, quoting before a long wait would go stale.
@@ -592,6 +604,15 @@ where
         detection_to_simulated_ms = ms(plan.simulated_at - plan.trade.intent.detected_at),
         dry_run,
     );
+    if dry_run {
+        notifier.notify(Notification::Simulated {
+            source_tx,
+            side,
+            token,
+            amount_in: plan.amount_in,
+            min_out: plan.min_out,
+        });
+    }
     let broadcaster = stage.broadcaster.as_ref()?;
 
     let sent = match broadcaster.send(&plan, fees).await {
@@ -618,38 +639,76 @@ where
         sign_to_broadcast_ms = ms(sent.broadcast_at - sent.signed_at),
         total_latency_ms = ms(sent.broadcast_at - intent.detected_at),
     );
+    notifier.notify(Notification::Broadcasted {
+        source_tx,
+        side,
+        token,
+        amount_in: plan.amount_in,
+        min_out: plan.min_out,
+        txs: sent.txs.iter().map(|t| (t.step, t.hash)).collect(),
+    });
     Some((plan, sent))
 }
 
-async fn track_one<T: TxSender>(b: &Broadcaster<T>, plan: &ExecutionPlan, sent: &SentTrade) {
+async fn track_one<T: TxSender>(
+    b: &Broadcaster<T>,
+    plan: &ExecutionPlan,
+    sent: &SentTrade,
+    notifier: &Notifier,
+) {
     let source_tx = plan.trade.intent.source_tx_hash;
+    let side = plan.trade.side();
+    let token = plan.trade.token();
     let swap = sent.txs.last().map(|t| t.hash);
+    let failed = |stage: &'static str, reason: String| Notification::Failed {
+        source_tx,
+        side,
+        token,
+        stage,
+        reason,
+        tx: swap,
+    };
     match b.track(sent).await {
-        Ok(r) if r.success => tracing::info!(
-            event = "trade_confirmed",
-            %source_tx,
-            tx = ?swap,
-            block = ?r.block_number,
-            gas_used = r.gas_used,
-            effective_gas_price = r.effective_gas_price,
-            broadcast_to_confirm_ms = ms(sent.broadcast_at.elapsed()),
-        ),
-        Ok(r) => tracing::warn!(
-            event = "trade_failed",
-            %source_tx,
-            tx = ?swap,
-            stage = "onchain",
-            reason = "swap reverted on-chain",
-            block = ?r.block_number,
-            gas_used = r.gas_used,
-        ),
-        Err(e) => tracing::warn!(
-            event = "trade_failed",
-            %source_tx,
-            tx = ?swap,
-            stage = "receipt",
-            reason = %e,
-        ),
+        Ok(r) if r.success => {
+            tracing::info!(
+                event = "trade_confirmed",
+                %source_tx,
+                tx = ?swap,
+                block = ?r.block_number,
+                gas_used = r.gas_used,
+                effective_gas_price = r.effective_gas_price,
+                broadcast_to_confirm_ms = ms(sent.broadcast_at.elapsed()),
+            );
+            notifier.notify(Notification::Confirmed {
+                source_tx,
+                side,
+                token,
+                tx: swap,
+                block: r.block_number,
+            });
+        }
+        Ok(r) => {
+            tracing::warn!(
+                event = "trade_failed",
+                %source_tx,
+                tx = ?swap,
+                stage = "onchain",
+                reason = "swap reverted on-chain",
+                block = ?r.block_number,
+                gas_used = r.gas_used,
+            );
+            notifier.notify(failed("onchain", "swap reverted on-chain".into()));
+        }
+        Err(e) => {
+            tracing::warn!(
+                event = "trade_failed",
+                %source_tx,
+                tx = ?swap,
+                stage = "receipt",
+                reason = %e,
+            );
+            notifier.notify(failed("receipt", e.to_string()));
+        }
     }
 }
 
@@ -1133,7 +1192,7 @@ mod tests {
             .await
             .unwrap();
         drop(tx);
-        run_stage(Arc::clone(&stage), rx, 2).await;
+        run_stage(Arc::clone(&stage), rx, 2, Notifier::disabled()).await;
         stage
     }
 

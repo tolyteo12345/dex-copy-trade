@@ -109,6 +109,8 @@ cargo build --release
 | `TRADE_COOLDOWN_SECS` | `30` | Khoảng cách tối thiểu giữa 2 lệnh copy cùng token + chiều (0 = tắt) |
 | `CHANNEL_CAPACITY` | `1024` | Kích thước các bounded channel |
 | `EXECUTOR_WORKERS` | `4` | Số lệnh được quote/simulate song song |
+| `TELEGRAM_BOT_TOKEN` | rỗng | Token bot từ @BotFather. Đặt cùng `TELEGRAM_CHAT_ID` để bật thông báo (tín hiệu copy, simulate/gửi/xác nhận/lỗi kèm link tx). Gửi qua task nền, hàng đợi đầy thì bỏ tin, không làm chậm trade |
+| `TELEGRAM_CHAT_ID` | rỗng | Chat id user/group/channel (vd `-1001234567890` hoặc `@my_channel`) |
 | `LOG_LEVEL` | `info` | Cú pháp `EnvFilter`, ví dụ `dex_copy_trade=debug,info` |
 
 Mọi giá trị được validate lúc startup: địa chỉ phải hợp lệ (đúng EIP-55 nếu viết hoa/thường

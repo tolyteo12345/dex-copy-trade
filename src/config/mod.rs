@@ -7,6 +7,7 @@ use alloy::primitives::{Address, U256};
 
 use crate::ethereum::signer::{BotSigner, SignerError};
 use crate::models::Dex;
+use crate::notify::TelegramConfig;
 
 pub const BPS_DENOMINATOR: u32 = 10_000;
 
@@ -100,6 +101,8 @@ pub struct Config {
     pub trade_cooldown: Duration,
     pub channel_capacity: usize,
     pub executor_workers: usize,
+    /// `None` = notifications off (both TELEGRAM_* vars unset).
+    pub telegram: Option<TelegramConfig>,
 }
 
 impl Config {
@@ -226,6 +229,25 @@ impl Config {
         let executor_workers =
             parse_positive_usize("EXECUTOR_WORKERS", &or_default("EXECUTOR_WORKERS", "4"))?;
 
+        let telegram = match (get("TELEGRAM_BOT_TOKEN"), get("TELEGRAM_CHAT_ID")) {
+            (None, None) => None,
+            (Some(_), None) => return Err(ConfigError::Missing("TELEGRAM_CHAT_ID")),
+            (None, Some(_)) => return Err(ConfigError::Missing("TELEGRAM_BOT_TOKEN")),
+            (Some(bot_token), Some(chat_id)) => {
+                // Shape check only (`<bot id>:<secret>`); the value never enters the error.
+                let valid = bot_token.split_once(':').is_some_and(|(id, secret)| {
+                    !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) && !secret.is_empty()
+                });
+                if !valid {
+                    return Err(invalid(
+                        "TELEGRAM_BOT_TOKEN",
+                        "expected `<bot id>:<secret>` as issued by @BotFather",
+                    ));
+                }
+                Some(TelegramConfig { bot_token, chat_id })
+            }
+        };
+
         Ok(Self {
             chain_id,
             ws_url,
@@ -248,6 +270,7 @@ impl Config {
             trade_cooldown,
             channel_capacity,
             executor_workers,
+            telegram,
         })
     }
 }
@@ -612,6 +635,38 @@ mod tests {
             env.insert(key, bad.into());
             assert_invalid(&env, key);
         }
+    }
+
+    #[test]
+    fn telegram_settings() {
+        assert!(load(&base_env()).unwrap().telegram.is_none());
+
+        let token = "123456:SECRET-abc";
+        let mut env = base_env();
+        env.insert("TELEGRAM_BOT_TOKEN", token.into());
+        match load(&env) {
+            Err(ConfigError::Missing(k)) => assert_eq!(k, "TELEGRAM_CHAT_ID"),
+            other => panic!("expected Missing, got {other:?}"),
+        }
+        env.insert("TELEGRAM_CHAT_ID", "-1001234".into());
+        let cfg = load(&env).unwrap();
+        let tg = cfg.telegram.as_ref().unwrap();
+        assert_eq!(
+            (tg.bot_token.as_str(), tg.chat_id.as_str()),
+            (token, "-1001234")
+        );
+        assert!(!format!("{cfg:?}").contains("SECRET"));
+
+        env.insert("TELEGRAM_BOT_TOKEN", "SECRET-no-colon".into());
+        let err = load(&env).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                key: "TELEGRAM_BOT_TOKEN",
+                ..
+            }
+        ));
+        assert!(!err.to_string().contains("SECRET"));
     }
 
     #[test]
