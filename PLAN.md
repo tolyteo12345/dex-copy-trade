@@ -95,3 +95,17 @@ Theo đúng thứ tự PHASE trong spec. Mỗi phase kết thúc bằng `cargo f
 - [x] Kiểm chứng: 116 tx V4 mainnet → 53 trade, 47/47 thành công khớp receipt, 0 hồi quy
       V2/V3; 3 route V4 thật (hook, dynamic fee, 2-hop) simulate OK; e2e Anvil V4 BUY+SELL
 - [x] 136 unit/fixture + 12 test live
+
+## PHASE 8 — Solana / pump.fun (process riêng) ✅ DONE
+- [x] Tái cấu trúc theo thư mục, vẫn một crate: `src/eth/` (code cũ, không đổi hành vi),
+      `src/sol/`, `src/common/` (Telegram, dedup TTL, parse env, redact, tracing/shutdown).
+      Hai binary `eth-copy-trade` / `sol-copy-trade`, mỗi chain một container
+- [x] Feature `sol`: build chỉ ETH (`--no-default-features`) có 0 crate Solana/gRPC
+- [x] Watcher Yellowstone gRPC (`processed`, reconnect + ping). Decoder theo event pump
+      (TradeEvent / BuyEvent / SellEvent), chạy đúng với mọi phiên bản instruction và router
+- [x] Bot build `buy_exact_quote_in_v3` / `sell_v3` (curve) và `buy_exact_quote_in_v2` /
+      `sell_v2` (PumpSwap, wrap/unwrap WSOL), simulate → `min_out` từ lượng thực nhận,
+      CU limit = unit × 1.3, gửi qua RPC thường (không Jito)
+- [x] Kiểm chứng: 13 tx mainnet làm fixture. Account do bot build khớp instruction v3/v2 thật.
+      Simulate trên mainnet: BUY+SELL curve và PumpSwap thành công
+- [x] 178 unit + 11 fixture (ETH+SOL), 14 test live (12 ETH + 2 SOL)

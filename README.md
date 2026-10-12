@@ -1,6 +1,17 @@
-# dex-copy-trade — Ethereum Copy Trading Bot (Rust)
+# dex-copy-trade — Copy Trading Bot (Rust): Ethereum + Solana
 
-Bot theo dõi real-time một danh sách ví Ethereum. Khi một ví swap trên Uniswap, bot hiểu
+Repo có **hai bot, hai process riêng** (chung một crate):
+
+| Binary | Chain / sàn | Tài liệu |
+|---|---|---|
+| `eth-copy-trade` | Ethereum, Uniswap V2/V3/Universal Router/V4 | README này |
+| `sol-copy-trade` | Solana, pump.fun (bonding curve + PumpSwap) | [SOLANA.md](SOLANA.md) |
+
+Hai bot không dùng chung runtime, kết nối hay cấu hình (biến SOL có tiền tố `SOL_`), nên bot
+này không làm chậm bot kia. Build chỉ ETH (`--no-default-features`) không biên dịch dependency
+Solana nào. Phần còn lại của README nói về bot ETH.
+
+Bot ETH theo dõi real-time một danh sách ví Ethereum. Khi một ví swap trên Uniswap, bot hiểu
 *ý định* giao dịch (mua/bán token nào, bao nhiêu), áp dụng chiến lược copy + risk engine,
 rồi **tự build giao dịch mới** cho ví của bot. Bot không bao giờ replay calldata gốc.
 
@@ -122,9 +133,9 @@ là bot dừng ngay với thông báo rõ ràng.
 ## Running locally
 
 ```bash
-cargo run --release
-# hoặc
-docker compose up --build
+cargo run --release --bin eth-copy-trade
+# hoặc (mỗi chain một container)
+docker compose up -d --build eth-bot      # sol-bot cho Solana, bỏ tên service để chạy cả hai
 ```
 
 Dừng bằng `Ctrl+C` / `SIGTERM`. Bot ngừng nhận lệnh mới, đợi các lệnh đang chạy xong
@@ -263,19 +274,22 @@ Sau khi quote (`execution/executor.rs`):
 ## Tests
 
 ```bash
-cargo test                                  # unit + fixture (offline)
-ETH_HTTP_URL=https://... cargo test -- --ignored   # live mainnet (chỉ đọc + simulate)
+cargo test                                  # unit + fixture (offline), ETH + SOL
+cargo test --no-default-features            # chỉ ETH (không build Solana)
+ETH_HTTP_URL=https://... cargo test --test 'eth_*' -- --ignored   # live mainnet (chỉ đọc + simulate)
 ```
+
+Test của bot SOL: xem [SOLANA.md → Test](SOLANA.md#test).
 
 | Bộ test | Nội dung |
 |---|---|
 | unit (`src/**`) | Config, decoder, strategy, risk, dedup, nonce (64 task song song), gas, executor, broadcast (ký thật bằng key test) |
-| `uniswap_fixtures` | 16 tx Uniswap mainnet thật (V2/V3/UR/V4, đã đối chiếu receipt) |
-| `rpc_chain_reader`, `decision_live`, `executor_live` | Đọc state, quyết định, quote/simulate trên mainnet thật |
-| `broadcast_live` | Ký + gửi thật bằng key ngẫu nhiên số dư 0: node giải mã tx và từ chối vì thiếu tiền |
-| `anvil_e2e` | **Vòng đời đầy đủ trên Anvil fork**, cho V2 và V4: ví nguồn swap (pending) → bot copy BUY → mined → ví nguồn bán → bot copy SELL (approve [+ Permit2] + swap, nonce liên tiếp) → mined |
+| `eth_uniswap_fixtures` | 16 tx Uniswap mainnet thật (V2/V3/UR/V4, đã đối chiếu receipt) |
+| `eth_rpc_chain_reader`, `eth_decision_live`, `eth_executor_live` | Đọc state, quyết định, quote/simulate trên mainnet thật |
+| `eth_broadcast_live` | Ký + gửi thật bằng key ngẫu nhiên số dư 0: node giải mã tx và từ chối vì thiếu tiền |
+| `eth_anvil_e2e` | **Vòng đời đầy đủ trên Anvil fork**, cho V2 và V4: ví nguồn swap (pending) → bot copy BUY → mined → ví nguồn bán → bot copy SELL (approve [+ Permit2] + swap, nonce liên tiếp) → mined |
 
-`anvil_e2e` cần Foundry (`anvil` trong PATH, `~/.foundry/bin`, hoặc `ANVIL_BIN`).
+`eth_anvil_e2e` cần Foundry (`anvil` trong PATH, `~/.foundry/bin`, hoặc `ANVIL_BIN`).
 
 ---
 

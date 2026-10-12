@@ -1,4 +1,4 @@
-# Architecture — Ethereum Copy Trading Bot
+# Architecture — Copy Trading Bot (Ethereum + Solana)
 
 ## 1. Mục tiêu hệ thống
 
@@ -37,50 +37,65 @@ policy sẽ quyết định ở Phase 2+ sau khi đo latency thực tế).
 
 ## 3. Module layout
 
+Một crate, hai binary, mỗi chain một process. Code chia theo thư mục: `eth/` và `sol/` không
+import lẫn nhau, chỉ cùng dùng `common/`. Thiết kế bot Solana xem [SOLANA.md](SOLANA.md).
+
 ```
 src/
-  main.rs                 wiring, channel setup, graceful shutdown orchestration
-  config/mod.rs            load + validate env config
-  ethereum/
-    mod.rs
-    provider.rs            alloy Provider (WS + HTTP fallback)
-    signer.rs               PrivateKeySigner wrapper (zeroize-aware)
-    nonce.rs                NonceManager (atomic, concurrency-safe)
-  watcher/
-    mod.rs                  Watcher trait + mode dispatch
-    pending.rs              pending tx subscription
-    blocks.rs               new block subscription + tx scan
-  decoder/
-    mod.rs                  DexDecoder trait, registry
-    classifier.rs           SWAP/TRANSFER/APPROVE/CONTRACT_CALL/DEPLOY/UNKNOWN
-    uniswap_v2.rs
-    uniswap_v3.rs
-    universal_router.rs
-  dex/
-    mod.rs                  Dex enum, DexAdapter trait (quote + build swap)
-    uniswap_v2.rs
-    uniswap_v3.rs
-  strategy/
-    mod.rs                  CopyStrategy trait
-    copy_strategy.rs         FIXED_ETH/FIXED_USD/RATIO/PROPORTIONAL impls
-  risk/
-    mod.rs
-    engine.rs                RiskEngine + RiskRule checks
-  execution/
-    mod.rs
-    executor.rs              pipeline orchestration per CopyTrade
-    simulator.rs             eth_call pre-flight
-    allowance.rs             ERC20 allowance check/approve
-    gas.rs                   GasStrategy trait (EIP-1559)
-  models/
-    mod.rs
-    trade_intent.rs           TradeIntent, TradeSide, Dex
-    copy_trade.rs             CopyTrade (sized, post-strategy)
-  storage/
-    mod.rs                   DedupStore trait + in-memory impl (Redis/PG-ready)
-  utils/
-    mod.rs                   shared helpers (address parsing, WETH consts)
+  lib.rs                   pub mod common; pub mod eth; #[cfg(feature = "sol")] pub mod sol;
+  bin/
+    eth-copy-trade.rs      ETH: wiring, channel setup, graceful shutdown orchestration
+    sol-copy-trade.rs      SOL: tương tự, process riêng (feature `sol`)
+  common/                  dùng chung, không phụ thuộc eth/sol
+    backoff.rs              exponential backoff
+    dedup.rs                TtlSet<K>: "đã xử lý" in-memory có TTL (ETH: DedupKey, SOL: Signature)
+    env.rs                  parse env (bool strict, ratio→bps, scheme URL, Telegram)
+    redact.rs               che API key trong URL / thông báo lỗi
+    runtime.rs              init_tracing, shutdown_signal
+    telegram.rs             Notifier<N: Render> + hàng đợi + TelegramSink (retry, 429)
+  eth/
+    config/mod.rs            load + validate env config
+    ethereum/
+      provider.rs            alloy Provider (WS + HTTP fallback)
+      signer.rs              PrivateKeySigner wrapper (zeroize-aware)
+      nonce.rs               NonceManager (atomic, concurrency-safe)
+      chain_state.rs         ChainReader
+    watcher/
+      mod.rs                 Watcher trait + mode dispatch
+      pending.rs             pending tx subscription
+      blocks.rs              new block subscription + tx scan
+    decoder/
+      mod.rs                 DexDecoder trait, registry
+      classifier.rs          SWAP/TRANSFER/APPROVE/CONTRACT_CALL/DEPLOY/UNKNOWN
+      uniswap_v2.rs, uniswap_v3.rs, universal_router.rs, uniswap_v4.rs
+    dex/
+      mod.rs                 Dex enum, DexAdapter trait (quote + build swap)
+      uniswap_v2.rs, uniswap_v3.rs, uniswap_v4.rs
+    strategy/                CopyStrategy: FIXED_ETH/FIXED_USD/RATIO/PROPORTIONAL
+    risk/                    RiskEngine + RiskRule checks
+    execution/               executor, simulator (eth_simulateV1), allowance, gas, broadcast
+    models/                  TradeIntent, CopyTrade, ChainSnapshot
+    notify/                  Notification (ETH) + render; giao Telegram ở common/telegram
+    storage/                 DedupStore trait (Redis/PG-ready) trên common::dedup
+    utils/                   chain_addresses(1)
+    decision.rs              strategy + risk stage
+  sol/
+    config.rs                SOL_* env
+    signer.rs                SolSigner (Keypair, Debug chỉ in pubkey)
+    watcher.rs               Yellowstone gRPC → SourceTx
+    decoder.rs               event pump → SolTradeIntent
+    pump.rs                  địa chỉ, PDA, layout account, event, build instruction
+    decision.rs              precheck + 1× getMultipleAccounts + sizing + risk
+    executor.rs              build → simulate → min_out → [live] gửi → theo dõi
+    rpc.rs                   SolRpc trait + JSON-RPC client (reqwest)
+    notify.rs                SolNotification + render (solscan)
+    models.rs                SourceTx, SolTradeIntent, SolCopyTrade
 ```
+
+Feature `sol` (mặc định bật) gắn toàn bộ dependency Solana và gRPC. `cargo build
+--no-default-features --bin eth-copy-trade` cho binary ETH không chứa crate Solana nào. Dù
+build cả hai thì binary ETH cũng không link code `sol/`: hai process không chia sẻ tài nguyên
+lúc chạy.
 
 ### Dependency direction
 
